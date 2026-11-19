@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field
 
 APP_DIR = Path(os.getenv("CLIPAI_DATA_DIR", "/tmp/clipai-data"))
 MAX_BYTES = int(os.getenv("MAX_VIDEO_BYTES", str(500 * 1024 * 1024)))
-MAX_DURATION = int(os.getenv("MAX_VIDEO_SECONDS", "7200"))
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".webm", ".m4v", ".mkv"}
 APP_DIR.mkdir(parents=True, exist_ok=True)
 JOBS: dict[str, dict] = {}
@@ -152,8 +151,6 @@ def render_source(job_id: str, source: Path, clip_length: int, max_clips: int, t
         if trim_start < 0 or trim_end <= trim_start or trim_end > duration:
             raise ValueError("Trim end must be after trim start and within the source video duration.")
         selected_duration = trim_end - trim_start
-        if selected_duration > MAX_DURATION:
-            raise ValueError(f"Selected trim must be under {MAX_DURATION // 60} minutes. Shorten the selected range.")
         count = min(max_clips, max(1, int(selected_duration // clip_length)))
         relative_starts = [max(0, min(selected_duration - clip_length, i * max(clip_length, (selected_duration - clip_length) / max(1, count - 1)))) for i in range(count)]
         starts = [trim_start + value for value in relative_starts]
