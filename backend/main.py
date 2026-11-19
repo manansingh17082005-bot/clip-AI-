@@ -163,7 +163,7 @@ def render_source(job_id: str, source: Path, clip_length: int, max_clips: int, t
             name = f"clip-{index:02d}.mp4"
             target = folder / name
             run([
-                "ffmpeg", "-y", "-ss", str(start), "-i", str(source), "-t", str(min(clip_length, duration-start)),
+                "ffmpeg", "-y", "-ss", str(start), "-i", str(source), "-t", str(min(clip_length, trim_end-start)),
                 "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
                 "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(target)
