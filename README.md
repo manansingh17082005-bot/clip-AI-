@@ -36,7 +36,7 @@ GitHub Pages serves the frontend only; it is not a video-processing server.
 
 ## Backend API (first working MVP)
 
-A Dockerized FastAPI service is in `backend/`. It accepts a **direct HTTPS video-file URL**, downloads it in the cloud, probes its duration, and renders evenly spaced vertical 9:16 MP4 segments using FFmpeg.
+A Dockerized FastAPI service is in `backend/`. It accepts a **direct HTTPS video-file URL** or a **video file uploaded from the browser**, stores the source in the cloud worker's temporary disk, probes its duration, and renders evenly spaced vertical 9:16 MP4 segments using FFmpeg. The API also classifies YouTube, Twitch and supported campaign-page links and explains the authorized source workflow.
 
 ### Deploy on Render
 
@@ -49,7 +49,8 @@ The included `backend/render.yaml` is an optional Blueprint starting point. Free
 
 ### Current backend limitations
 
-- It accepts direct public HTTPS video-file URLs only. A Vyro campaign page URL is not a direct video file; private/login-only links, redirects, and sites that block direct access will not work. Use an authorized direct file URL.
+- Direct URL processing accepts direct public HTTPS video-file URLs only; redirects and private/login-only links are rejected. Browser upload accepts MP4, MOV, WebM, M4V and MKV files up to `MAX_VIDEO_BYTES` (default 500 MB). Files are written to temporary service storage.
+- YouTube watch pages, Twitch VOD/clip pages and campaign landing pages are classified but **not downloaded or scraped**. YouTube's Data API does not provide arbitrary watch-page media downloads; Twitch/campaign footage must be supplied through a creator-authorized download or documented provider integration. The current build does not yet include those provider OAuth/API adapters.
 - It creates evenly spaced segments, **not AI-ranked viral highlights**. Speech transcription, highlight scoring, animated captions, persistent storage, authentication, a durable job queue and social publishing are future integrations.
 - Do not use it to bypass platform restrictions or process content without permission.
 - Configure authentication, rate limiting, durable storage and a persistent queue before public/production use.
