@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: clip-ai-api
+    runtime: docker
+    dockerContext: ./backend
+    dockerfilePath: ./backend/Dockerfile
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: CORS_ORIGINS
+        value: https://manansingh17082005-bot.github.io
+      - key: MAX_VIDEO_BYTES
+        value: "524288000"
+      - key: MAX_VIDEO_SECONDS
+        value: "7200"
