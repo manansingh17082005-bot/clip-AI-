@@ -36,6 +36,8 @@ class CreateJob(BaseModel):
     video_url: str = Field(min_length=12, max_length=2048)
     clip_length: int = Field(default=30, ge=15, le=90)
     max_clips: int = Field(default=5, ge=1, le=10)
+    trim_start_seconds: float = Field(default=0, ge=0)
+    trim_end_seconds: float | None = Field(default=None, gt=0)
 
 
 class InspectSource(BaseModel):
@@ -137,16 +139,24 @@ def run(cmd: list[str]) -> str:
     return result.stdout
 
 
-def render_source(job_id: str, source: Path, clip_length: int, max_clips: int) -> None:
+def render_source(job_id: str, source: Path, clip_length: int, max_clips: int, trim_start_seconds: float = 0, trim_end_seconds: float | None = None) -> None:
     folder = APP_DIR / job_id
     try:
         JOBS[job_id]["status"] = "analyzing"
         probe = run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(source)])
         duration = float(probe.strip())
-        if duration <= 0 or duration > MAX_DURATION:
-            raise ValueError(f"Video duration must be under {MAX_DURATION // 60} minutes.")
-        count = min(max_clips, max(1, int(duration // clip_length)))
-        starts = [max(0, min(duration - clip_length, i * max(clip_length, (duration - clip_length) / max(1, count - 1)))) for i in range(count)]
+        if duration <= 0:
+            raise ValueError("The source video has an invalid duration.")
+        trim_start = float(trim_start_seconds)
+        trim_end = duration if trim_end_seconds is None else float(trim_end_seconds)
+        if trim_start < 0 or trim_end <= trim_start or trim_end > duration:
+            raise ValueError("Trim end must be after trim start and within the source video duration.")
+        selected_duration = trim_end - trim_start
+        if selected_duration > MAX_DURATION:
+            raise ValueError(f"Selected trim must be under {MAX_DURATION // 60} minutes. Shorten the selected range.")
+        count = min(max_clips, max(1, int(selected_duration // clip_length)))
+        relative_starts = [max(0, min(selected_duration - clip_length, i * max(clip_length, (selected_duration - clip_length) / max(1, count - 1)))) for i in range(count)]
+        starts = [trim_start + value for value in relative_starts]
         JOBS[job_id]["status"] = "rendering"
         outputs = []
         for index, start in enumerate(starts, 1):
@@ -159,25 +169,25 @@ def render_source(job_id: str, source: Path, clip_length: int, max_clips: int) -
                 "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(target)
             ])
             outputs.append({"name": name, "download_url": f"/api/jobs/{job_id}/clips/{name}", "start_seconds": round(start, 2)})
-        JOBS[job_id].update(status="completed", clips=outputs, source_duration=round(duration, 2))
+        JOBS[job_id].update(status="completed", clips=outputs, source_duration=round(duration, 2), trim_start_seconds=round(trim_start, 2), trim_end_seconds=round(trim_end, 2), selected_duration=round(selected_duration, 2))
     except Exception as exc:
         JOBS[job_id].update(status="failed", error=str(exc)[:1000])
 
 
-def process_url_job(job_id: str, url: str, clip_length: int, max_clips: int) -> None:
+def process_url_job(job_id: str, url: str, clip_length: int, max_clips: int, trim_start_seconds: float = 0, trim_end_seconds: float | None = None) -> None:
     folder = APP_DIR / job_id
     folder.mkdir(parents=True, exist_ok=True)
     source = folder / "source-video"
     try:
         JOBS[job_id]["status"] = "downloading"
         asyncio.run(download_video(url, source))
-        render_source(job_id, source, clip_length, max_clips)
+        render_source(job_id, source, clip_length, max_clips, trim_start_seconds, trim_end_seconds)
     except Exception as exc:
         JOBS[job_id].update(status="failed", error=str(exc)[:1000])
 
 
-def process_uploaded_job(job_id: str, source: Path, clip_length: int, max_clips: int) -> None:
-    render_source(job_id, source, clip_length, max_clips)
+def process_uploaded_job(job_id: str, source: Path, clip_length: int, max_clips: int, trim_start_seconds: float = 0, trim_end_seconds: float | None = None) -> None:
+    render_source(job_id, source, clip_length, max_clips, trim_start_seconds, trim_end_seconds)
 
 
 def new_job(job_id: str) -> None:
@@ -224,7 +234,7 @@ def create_job(payload: CreateJob, background: BackgroundTasks):
         raise HTTPException(status_code=400, detail=str(exc))
     job_id = uuid.uuid4().hex
     new_job(job_id)
-    background.add_task(process_url_job, job_id, safe_url, payload.clip_length, payload.max_clips)
+    background.add_task(process_url_job, job_id, safe_url, payload.clip_length, payload.max_clips, payload.trim_start_seconds, payload.trim_end_seconds)
     return {"job_id": job_id, "status": "queued", "status_url": f"/api/jobs/{job_id}"}
 
 
@@ -233,7 +243,9 @@ async def create_upload_job(
     background: BackgroundTasks,
     file: UploadFile = File(...),
     clip_length: int = 30,
-    max_clips: int = 5
+    max_clips: int = 5,
+    trim_start_seconds: float = 0,
+    trim_end_seconds: float | None = None
 ):
     if clip_length < 15 or clip_length > 90 or max_clips < 1 or max_clips > 10:
         raise HTTPException(status_code=400, detail="Clip length must be 15–90 seconds and clip count 1–10.")
@@ -265,7 +277,7 @@ async def create_upload_job(
         await file.close()
     new_job(job_id)
     JOBS[job_id]["source_name"] = Path(file.filename or "uploaded video").name
-    background.add_task(process_uploaded_job, job_id, destination, clip_length, max_clips)
+    background.add_task(process_uploaded_job, job_id, destination, clip_length, max_clips, trim_start_seconds, trim_end_seconds)
     return {"job_id": job_id, "status": "queued", "status_url": f"/api/jobs/{job_id}"}
 
 
