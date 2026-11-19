@@ -1,5 +1,6 @@
 import asyncio
 import ipaddress
+import json
 import os
 import shutil
 import socket
@@ -14,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-APP_DIR = Path(os.getenv("CLIPAI_DATA_DIR", "/tmp/clipai-data"))
+APP_DIR = Path(os.getenv("CLIPAI_DATA_DIR", "/var/data/clipai-data"))
 MAX_BYTES = int(os.getenv("MAX_VIDEO_BYTES", str(500 * 1024 * 1024)))
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".webm", ".m4v", ".mkv"}
 APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -138,10 +139,66 @@ def run(cmd: list[str]) -> str:
     return result.stdout
 
 
+def persist_job(job_id: str) -> None:
+    """Atomically persist a job record on the configured durable data volume."""
+    job = JOBS.get(job_id)
+    if not job:
+        return
+    folder = APP_DIR / job_id
+    folder.mkdir(parents=True, exist_ok=True)
+    temp = folder / "job.json.tmp"
+    temp.write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
+    temp.replace(folder / "job.json")
+
+
+def new_job(job_id: str, **metadata) -> None:
+    folder = APP_DIR / job_id
+    folder.mkdir(parents=True, exist_ok=True)
+    JOBS[job_id] = {"id": job_id, "status": "queued", "clips": [], **metadata}
+    persist_job(job_id)
+
+
+@app.on_event("startup")
+async def restore_jobs_after_restart():
+    """Reload persisted jobs and resume any job interrupted by a Render restart."""
+    for record in APP_DIR.glob("*/job.json"):
+        try:
+            job = json.loads(record.read_text(encoding="utf-8"))
+            job_id = job.get("id")
+            if not job_id:
+                continue
+            JOBS[job_id] = job
+            if job.get("status") not in {"queued", "downloading", "analyzing", "rendering"}:
+                continue
+            job["status"] = "queued"
+            job["error"] = "Processing resumed after a service restart."
+            persist_job(job_id)
+            if job.get("kind") == "url":
+                asyncio.create_task(asyncio.to_thread(
+                    process_url_job, job_id, job["video_url"], job["clip_length"],
+                    job["max_clips"], job.get("trim_start_seconds", 0),
+                    job.get("trim_end_seconds")
+                ))
+            elif job.get("kind") == "upload":
+                source = Path(job.get("source_path", ""))
+                if source.is_file():
+                    asyncio.create_task(asyncio.to_thread(
+                        process_uploaded_job, job_id, source, job["clip_length"],
+                        job["max_clips"], job.get("trim_start_seconds", 0),
+                        job.get("trim_end_seconds")
+                    ))
+                else:
+                    job.update(status="failed", error="The uploaded source file is missing from persistent storage. Please upload it again.")
+                    persist_job(job_id)
+        except Exception:
+            continue
+
+
 def render_source(job_id: str, source: Path, clip_length: int, max_clips: int, trim_start_seconds: float = 0, trim_end_seconds: float | None = None) -> None:
     folder = APP_DIR / job_id
     try:
         JOBS[job_id]["status"] = "analyzing"
+        persist_job(job_id)
         probe = run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(source)])
         duration = float(probe.strip())
         if duration <= 0:
@@ -155,6 +212,7 @@ def render_source(job_id: str, source: Path, clip_length: int, max_clips: int, t
         relative_starts = [max(0, min(selected_duration - clip_length, i * max(clip_length, (selected_duration - clip_length) / max(1, count - 1)))) for i in range(count)]
         starts = [trim_start + value for value in relative_starts]
         JOBS[job_id]["status"] = "rendering"
+        persist_job(job_id)
         outputs = []
         for index, start in enumerate(starts, 1):
             name = f"clip-{index:02d}.mp4"
@@ -167,8 +225,11 @@ def render_source(job_id: str, source: Path, clip_length: int, max_clips: int, t
             ])
             outputs.append({"name": name, "download_url": f"/api/jobs/{job_id}/clips/{name}", "start_seconds": round(start, 2)})
         JOBS[job_id].update(status="completed", clips=outputs, source_duration=round(duration, 2), trim_start_seconds=round(trim_start, 2), trim_end_seconds=round(trim_end, 2), selected_duration=round(selected_duration, 2))
+        persist_job(job_id)
     except Exception as exc:
         JOBS[job_id].update(status="failed", error=str(exc)[:1000])
+        persist_job(job_id)
+        persist_job(job_id)
 
 
 def process_url_job(job_id: str, url: str, clip_length: int, max_clips: int, trim_start_seconds: float = 0, trim_end_seconds: float | None = None) -> None:
@@ -177,6 +238,7 @@ def process_url_job(job_id: str, url: str, clip_length: int, max_clips: int, tri
     source = folder / "source-video"
     try:
         JOBS[job_id]["status"] = "downloading"
+        persist_job(job_id)
         asyncio.run(download_video(url, source))
         render_source(job_id, source, clip_length, max_clips, trim_start_seconds, trim_end_seconds)
     except Exception as exc:
@@ -186,9 +248,6 @@ def process_url_job(job_id: str, url: str, clip_length: int, max_clips: int, tri
 def process_uploaded_job(job_id: str, source: Path, clip_length: int, max_clips: int, trim_start_seconds: float = 0, trim_end_seconds: float | None = None) -> None:
     render_source(job_id, source, clip_length, max_clips, trim_start_seconds, trim_end_seconds)
 
-
-def new_job(job_id: str) -> None:
-    JOBS[job_id] = {"id": job_id, "status": "queued", "clips": []}
 
 
 @app.get("/")
@@ -230,7 +289,7 @@ def create_job(payload: CreateJob, background: BackgroundTasks):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     job_id = uuid.uuid4().hex
-    new_job(job_id)
+    new_job(job_id, kind="url", video_url=safe_url, clip_length=payload.clip_length, max_clips=payload.max_clips, trim_start_seconds=payload.trim_start_seconds, trim_end_seconds=payload.trim_end_seconds)
     background.add_task(process_url_job, job_id, safe_url, payload.clip_length, payload.max_clips, payload.trim_start_seconds, payload.trim_end_seconds)
     return {"job_id": job_id, "status": "queued", "status_url": f"/api/jobs/{job_id}"}
 
@@ -272,8 +331,7 @@ async def create_upload_job(
         raise
     finally:
         await file.close()
-    new_job(job_id)
-    JOBS[job_id]["source_name"] = Path(file.filename or "uploaded video").name
+    new_job(job_id, kind="upload", source_path=str(destination), clip_length=clip_length, max_clips=max_clips, trim_start_seconds=trim_start_seconds, trim_end_seconds=trim_end_seconds, source_name=Path(file.filename or "uploaded video").name)
     background.add_task(process_uploaded_job, job_id, destination, clip_length, max_clips, trim_start_seconds, trim_end_seconds)
     return {"job_id": job_id, "status": "queued", "status_url": f"/api/jobs/{job_id}"}
 
@@ -282,7 +340,7 @@ async def create_upload_job(
 def get_job(job_id: str):
     job = JOBS.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found. Jobs are currently stored in memory and reset when the service restarts.")
+        raise HTTPException(status_code=404, detail="Job record not found. Check that Render has a persistent disk mounted at /var/data and CLIPAI_DATA_DIR points to /var/data/clipai-data.")
     return job
 
 
