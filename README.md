@@ -32,3 +32,24 @@ In GitHub, open **Settings → Pages**, choose **Deploy from a branch**, select 
 https://manansingh17082005-bot.github.io/clip-AI-/
 
 GitHub Pages serves the frontend only; it is not a video-processing server.
+
+
+## Backend API (first working MVP)
+
+A Dockerized FastAPI service is in `backend/`. It accepts a **direct HTTPS video-file URL**, downloads it in the cloud, probes its duration, and renders evenly spaced vertical 9:16 MP4 segments using FFmpeg.
+
+### Deploy on Render
+
+1. Create a new **Web Service** from this repository.
+2. Choose Docker and set Dockerfile path to `backend/Dockerfile` (Docker context `backend`).
+3. Set `CORS_ORIGINS` to the exact GitHub Pages origin: `https://manansingh17082005-bot.github.io`.
+4. Deploy and test `/api/health`.
+
+The included `backend/render.yaml` is an optional Blueprint starting point. Free instances may sleep, have limited CPU/disk and are not suitable for reliable long video jobs. The MVP keeps job state and output files in local memory/disk, so a restart loses them.
+
+### Current backend limitations
+
+- It accepts direct public HTTPS video-file URLs only. A Vyro campaign page URL is not a direct video file; private/login-only links, redirects, and sites that block direct access will not work. Use an authorized direct file URL.
+- It creates evenly spaced segments, **not AI-ranked viral highlights**. Speech transcription, highlight scoring, animated captions, persistent storage, authentication, a durable job queue and social publishing are future integrations.
+- Do not use it to bypass platform restrictions or process content without permission.
+- Configure authentication, rate limiting, durable storage and a persistent queue before public/production use.
