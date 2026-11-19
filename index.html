@@ -34,7 +34,52 @@ function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.remove('hi
 function render(){ $('#projectCount').textContent=projects.length;$('#clipCount').textContent=projects.reduce((n,p)=>n+((p.clips||[]).length),0);$('#emptyState').classList.toggle('hidden',projects.length>0);$('#projectList').innerHTML=projects.map(p=>{const st=p.status||'saved';const links=(p.clips||[]).map((c,i)=>'<a style="color:var(--cyan);font-size:12px;margin-right:12px" href="'+API_BASE+c.download_url+'" target="_blank" rel="noopener">Download clip '+(i+1)+'</a>').join('');return '<div style="padding:15px 18px;border-top:1px solid var(--line)"><div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap"><div><strong>'+escapeHtml(p.name)+'</strong><div style="font-size:11px;color:var(--muted)">'+escapeHtml(p.source)+' · '+escapeHtml(p.date)+'</div></div><span class="status"><i class="dot" style="background:'+(st==='completed'?'var(--green)':st==='failed'?'#ff7777':'#e7bb65')+'"></i> '+escapeHtml(st)+'</span></div>'+(p.error?'<div style="color:#ff9999;font-size:12px;margin-top:8px">'+escapeHtml(p.error)+'</div>':'')+(links?'<div style="margin-top:10px">'+links+'</div>':'')+'</div>';}).join('');}
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function saveProjects(){localStorage.setItem('clipai_projects',JSON.stringify(projects));render();}
-async function pollJob(jobId,index){for(let attempt=0;attempt<450;attempt++){try{const r=await fetch(API_BASE+'/api/jobs/'+encodeURIComponent(jobId));const data=await r.json();const p=projects.find(x=>x.jobId===jobId);if(!p)return;p.status=data.status;if(data.clips)p.clips=data.clips;if(data.error)p.error=data.error;saveProjects();if(data.status==='completed'||data.status==='failed')return;}catch(e){const p=projects.find(x=>x.jobId===jobId);if(p){p.status='connection error';p.error='Could not reach the backend while checking this job.';saveProjects();}return;}await new Promise(resolve=>setTimeout(resolve,4000));}const p=projects.find(x=>x.jobId===jobId);if(p){p.status='still processing';saveProjects();}}
+async function pollJob(jobId,index){
+  let consecutiveFailures=0;
+  for(let attempt=0;attempt<450;attempt++){
+    const p=projects.find(x=>x.jobId===jobId);
+    if(!p)return;
+    try{
+      const r=await fetch(API_BASE+'/api/jobs/'+encodeURIComponent(jobId),{cache:'no-store'});
+      if(r.status===404){
+        p.status='job unavailable';
+        p.error='The backend no longer has this job record. The Render service may have restarted during processing. Please submit the video again.';
+        saveProjects();
+        return;
+      }
+      if(!r.ok){
+        if(r.status>=500)throw new Error('Backend returned HTTP '+r.status);
+        const body=await r.json().catch(()=>({}));
+        p.status='job check failed';
+        p.error=body.detail||('Job status request failed (HTTP '+r.status+').');
+        saveProjects();
+        return;
+      }
+      const data=await r.json();
+      consecutiveFailures=0;
+      p.status=data.status||'processing';
+      if(data.clips)p.clips=data.clips;
+      if(data.error)p.error=data.error;
+      else p.error='';
+      saveProjects();
+      if(data.status==='completed'||data.status==='failed')return;
+    }catch(e){
+      consecutiveFailures++;
+      p.status='reconnecting ('+consecutiveFailures+'/6)';
+      p.error='Temporary connection issue while checking the job. CLIP AI is retrying automatically.';
+      saveProjects();
+      if(consecutiveFailures>=6){
+        p.status='connection lost';
+        p.error='Could not reconnect to the backend after 6 attempts. Check Render health, then submit the video again if the job was interrupted.';
+        saveProjects();
+        return;
+      }
+    }
+    await new Promise(resolve=>setTimeout(resolve,4000));
+  }
+  const p=projects.find(x=>x.jobId===jobId);
+  if(p){p.status='still processing';p.error='The job is taking longer than expected. Refresh the project list later; keep this browser open.';saveProjects();}
+}
 function parseTime(value,label,allowBlank=false){const raw=value.trim();if(!raw&&allowBlank)return null;const parts=raw.split(':').map(Number);if(parts.length!==3||parts.some(x=>!Number.isFinite(x)||x<0)||parts[1]>=60||parts[2]>=60)throw new Error(label+' must use HH:MM:SS format.');return parts[0]*3600+parts[1]*60+parts[2];}
 function getTrim(){const start=parseTime($('#trimStart').value,'Trim start');const end=parseTime($('#trimEnd').value,'Trim end',true);if(end!==null&&end<=start)throw new Error('Trim end must be after trim start.');return {trim_start_seconds:start,trim_end_seconds:end};}
 async function startJob(url){const btn=$('#analyzeBtn');let trim;try{trim=getTrim();}catch(e){toast(e.message);return;}btn.disabled=true;btn.textContent='Checking source…';$('#sourceHelp').classList.add('hidden');try{const inspect=await fetch(API_BASE+'/api/sources/inspect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_url:url})});const info=await inspect.json();if(!inspect.ok)throw new Error(info.detail||'Could not inspect this link.');if(!info.can_process){$('#sourceHelp').innerHTML='<strong>'+escapeHtml(info.provider.toUpperCase())+' link detected.</strong><div style="margin-top:5px">'+escapeHtml(info.message)+'</div><div style="margin-top:6px">'+escapeHtml(info.next_step)+'</div>';$('#sourceHelp').classList.remove('hidden');throw new Error('This page link needs an authorized source video file first.');}btn.textContent='Submitting…';const r=await fetch(API_BASE+'/api/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({video_url:url,clip_length:30,max_clips:5,...trim})});const data=await r.json();if(!r.ok)throw new Error(data.detail||'The backend rejected this video URL.');const project={name:'Video project '+(projects.length+1),source:new URL(url).hostname,date:new Date().toLocaleString(),status:data.status,jobId:data.job_id,clips:[]};projects.unshift(project);saveProjects();toast('Cloud job submitted. Waiting for clips…');pollJob(data.job_id,0);}catch(e){toast('Could not start clipping: '+e.message);}finally{btn.disabled=false;btn.textContent='Find clips ↗';}}
