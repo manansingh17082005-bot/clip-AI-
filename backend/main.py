@@ -229,7 +229,6 @@ def render_source(job_id: str, source: Path, clip_length: int, max_clips: int, t
     except Exception as exc:
         JOBS[job_id].update(status="failed", error=str(exc)[:1000])
         persist_job(job_id)
-        persist_job(job_id)
 
 
 def process_url_job(job_id: str, url: str, clip_length: int, max_clips: int, trim_start_seconds: float = 0, trim_end_seconds: float | None = None) -> None:
@@ -243,6 +242,7 @@ def process_url_job(job_id: str, url: str, clip_length: int, max_clips: int, tri
         render_source(job_id, source, clip_length, max_clips, trim_start_seconds, trim_end_seconds)
     except Exception as exc:
         JOBS[job_id].update(status="failed", error=str(exc)[:1000])
+        persist_job(job_id)
 
 
 def process_uploaded_job(job_id: str, source: Path, clip_length: int, max_clips: int, trim_start_seconds: float = 0, trim_end_seconds: float | None = None) -> None:
