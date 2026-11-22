@@ -10,17 +10,17 @@ Write-Host "=== Clip AI local backend setup ===" -ForegroundColor Cyan
 Write-Host "Project folder: $RepoRoot"
 
 # Prefer Python 3.11, then 3.12. Keep existing Python installations untouched.
+# Temporarily allow launcher probes to fail so missing versions can fall back cleanly.
+$PreviousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 $PythonSelector = $null
-try {
-    & py -3.11 --version *> $null
-    if ($LASTEXITCODE -eq 0) { $PythonSelector = "-3.11" }
-} catch {}
+& py -3.11 --version *> $null
+if ($LASTEXITCODE -eq 0) { $PythonSelector = "-3.11" }
 if (-not $PythonSelector) {
-    try {
-        & py -3.12 --version *> $null
-        if ($LASTEXITCODE -eq 0) { $PythonSelector = "-3.12" }
-    } catch {}
+    & py -3.12 --version *> $null
+    if ($LASTEXITCODE -eq 0) { $PythonSelector = "-3.12" }
 }
+$ErrorActionPreference = $PreviousErrorAction
 if (-not $PythonSelector) {
     Write-Host "Python 3.11 or 3.12 is required. Install one, then rerun this script." -ForegroundColor Yellow
     exit 1
