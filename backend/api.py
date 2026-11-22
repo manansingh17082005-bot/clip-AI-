@@ -16,7 +16,7 @@ from funclip.videoclipper import VideoClipper
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 MAX_UPLOAD_BYTES = int(os.getenv("CLIP_AI_MAX_UPLOAD_MB", "500")) * 1024 * 1024
-MODEL_NAME = os.getenv("CLIP_AI_ASR_MODEL", "fun-asr-nano")
+MODEL_NAME = os.getenv("CLIP_AI_ASR_MODEL", "paraformer")
 LANG = os.getenv("CLIP_AI_LANG", "en")
 ALLOWED_ORIGINS = os.getenv("CLIP_AI_ALLOWED_ORIGINS", "*").split(",")
 
