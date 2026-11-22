@@ -27,3 +27,13 @@ This frontend commit alone does not configure Pages settings or connect the Pyth
 
 ## Notes
 The current UI is a frontend preview. The Generate button is intentionally disabled until a real backend exists; it must not imply a working AI clip pipeline.
+
+
+## CINE AI animation workflow
+
+1. Create and export a 2D side-scrolling Minecraft-style block-world animation with smooth stickman action in CINE AI.
+2. Open Clip AI and upload the exported MP4 in the existing video upload area.
+3. Run transcription, review the timestamped transcript, select the spoken section you want, and export a short clip.
+4. Use the existing 9:16 Shorts/Reels workflow when vertical output is needed.
+
+Clip AI remains the video clipping and repurposing tool; CINE AI remains the story and animation generator. The two projects share an MP4 handoff and do not duplicate each other's engines.
