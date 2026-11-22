@@ -9,19 +9,35 @@ This service adds the first processing connection to the Clip AI website. It wra
 - `POST /api/clip` — submit transcript text selected by the user and generate an MP4 clip
 - `GET /api/download/{job_id}/{filename}` — download generated MP4
 
-## Run locally (Windows)
+## Run locally on Windows (without Docker — recommended for the current setup)
 
-1. Install Docker Desktop.
-2. In the repository root, run:
+1. Install Python **3.11 or 3.12** (Python 3.14 is not supported by this dependency set yet).
+2. Install FFmpeg and ensure `ffmpeg.exe` is available in PATH. One Windows package-manager option is:
+
+```powershell
+winget install Gyan.FFmpeg.Shared
+``
+
+3. From the repository root, run the setup/start script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\\backend\\start_windows.ps1
+``
+
+The script creates an isolated `.venv-clip-ai` environment, installs CPU-only PyTorch and the FunClip/API requirements, runs `pip check`, and starts the local API. It reuses the environment on later launches.
+
+4. Keep the PowerShell window open. Visit `http://127.0.0.1:8000/api/health`; expect `ok: true`.
+5. On the Clip AI website, keep API URL set to `http://localhost:8000`, choose a video, click **Transcribe with AI**, then select transcript text and click **Create clip from selected transcript**.
+
+### Docker option (optional)
+
+If Docker Desktop is installed, from the repository root run:
 
 ```powershell
 docker build -t clip-ai-api -f backend/Dockerfile .
 docker run --rm -p 8000:8000 -e CLIP_AI_LANG=en clip-ai-api
 ```
 
-3. Open `http://localhost:8000/api/health`. Expected response includes `ok: true`.
-4. On the Clip AI site, use API URL `http://localhost:8000`, select a video and click **Transcribe with AI**.
-5. Select the transcript text you want to clip and click **Create clip from selected transcript**.
 
 ## Configuration
 
